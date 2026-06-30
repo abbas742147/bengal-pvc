@@ -1,116 +1,89 @@
-
+const bcrypt = require('bcryptjs');
 const db = require('./db');
 
 async function migrate() {
   console.log('Creating tables...');
   
-  await db.query(`CREATE TABLE IF NOT EXISTS users (
-    userid TEXT PRIMARY KEY,
-    name TEXT,
-    whatsapp TEXT UNIQUE,
-    email TEXT UNIQUE,
-    password TEXT,
-    role TEXT DEFAULT 'user',
-    district TEXT
-  )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT DEFAULT 'admin',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
 
-  await db.query(`CREATE TABLE IF NOT EXISTS orders (
-    orderid TEXT PRIMARY KEY,
-    userid TEXT,
-    date TIMESTAMPTZ DEFAULT NOW(),
-    address JSONB,
-    filelinks JSONB,
-    totalamount NUMERIC,
-    status TEXT,
-    trackingid TEXT,
-    paymentstatus TEXT,
-    deliverydate TIMESTAMPTZ,
-    remark TEXT
-  )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      customer_name TEXT,
+      phone TEXT,
+      address TEXT,
+      status TEXT DEFAULT 'PENDING',
+      total NUMERIC(10,2) DEFAULT 0,
+      payment_method TEXT,
+      upi_txn TEXT,
+      discount_code TEXT,
+      discount_percent INT DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      delivered_at TIMESTAMPTZ
+    );
+  `);
 
-  await db.query(`CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS order_items (
+      id SERIAL PRIMARY KEY,
+      order_id INT REFERENCES orders(id) ON DELETE CASCADE,
+      name TEXT,
+      qty INT,
+      price NUMERIC(10,2)
+    );
+  `);
 
-  await db.query(`CREATE TABLE IF NOT EXISTS payments (
-    orderid TEXT PRIMARY KEY,
-    email TEXT,
-    amount NUMERIC,
-    status TEXT,
-    date TIMESTAMPTZ,
-    utr TEXT,
-    planid TEXT,
-    type TEXT
-  )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS discounts (
+      code TEXT PRIMARY KEY,
+      percent INT NOT NULL,
+      max_uses INT,
+      uses INT DEFAULT 0,
+      active BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
 
-  await db.query(`CREATE TABLE IF NOT EXISTS franchisees (
-    franchiseid TEXT PRIMARY KEY,
-    name TEXT,
-    whatsapp TEXT,
-    email TEXT,
-    district TEXT,
-    password TEXT,
-    status TEXT DEFAULT 'ACTIVE',
-    balance NUMERIC DEFAULT 0
-  )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS discount_uses (
+      id SERIAL PRIMARY KEY,
+      code TEXT REFERENCES discounts(code),
+      order_id INT REFERENCES orders(id),
+      used_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
 
-  await db.query(`CREATE TABLE IF NOT EXISTS wallet_history (
-    txnid TEXT PRIMARY KEY,
-    franchiseid TEXT,
-    date TIMESTAMPTZ DEFAULT NOW(),
-    type TEXT,
-    amount NUMERIC,
-    description TEXT
-  )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS files (
+      id SERIAL PRIMARY KEY,
+      order_id INT REFERENCES orders(id) ON DELETE CASCADE,
+      filename TEXT,
+      path TEXT,
+      uploaded_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
 
-  await db.query(`CREATE TABLE IF NOT EXISTS withdrawals (
-    reqid TEXT PRIMARY KEY,
-    franchiseid TEXT,
-    date TIMESTAMPTZ DEFAULT NOW(),
-    amount NUMERIC,
-    upi TEXT,
-    status TEXT,
-    utr TEXT
-  )`);
-
-  await db.query(`CREATE TABLE IF NOT EXISTS discounts (
-    code TEXT PRIMARY KEY,
-    type TEXT,
-    value NUMERIC,
-    minorder NUMERIC DEFAULT 0,
-    maxuses INTEGER DEFAULT 0,
-    usedcount INTEGER DEFAULT 0,
-    active BOOLEAN DEFAULT true,
-    createdby TEXT,
-    createddate TIMESTAMPTZ DEFAULT NOW()
-  )`);
-
-  // Insert default settings if not exists
-  const defaults = [
-    ['PVC_PRICE','50'],
-    ['SHIPPING_FEE','30'],
-    ['FREE_SHIP_10PLUS','TRUE'],
-    ['COMMISSION','5'],
-    ['MIN_WITHDRAW','200'],
-    ['DISC_2_5','10'],
-    ['DISC_5_7','15'],
-    ['DISC_7_10','18'],
-    ['DISC_10_PLUS','24'],
-    ['NOTIF_ON','TRUE'],
-    ['NOTIF_TEXT','Welcome to Bengal PVC! Premium ID Card Printing.']
-  ];
-  for (const [k,v] of defaults) {
-    await db.query(`INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO NOTHING`, [k,v]);
-  }
-
-  // Create admin user
-  await db.query(`INSERT INTO users(userid,name,whatsapp,email,password,role,district) 
-    VALUES('ADMIN_1','Admin','0000000000','admin@bengalpvc.in','admin123','admin','All')
-    ON CONFLICT(userid) DO NOTHING`);
+  // Create admin user if not exists
+  const hash = await bcrypt.hash('admin123', 10);
+  await db.query(`
+    INSERT INTO users (username, password_hash, role)
+    VALUES ('admin', $1, 'admin')
+    ON CONFLICT (username) DO NOTHING;
+  `, [hash]);
 
   console.log('Migration complete!');
   process.exit(0);
 }
 
-migrate().catch(e=>{console.error(e);process.exit(1)});
+migrate().catch(err => {
+  console.error('Migration failed:', err);
+  process.exit(1);
+});
